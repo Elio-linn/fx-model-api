@@ -52,13 +52,13 @@ def append_prediction(record: dict) -> int:
     return new_id
 
 
-def update_actuals(record_id: int, actual_upper: float, actual_lower: float, ohlc: dict):
+def update_actuals(record_id: int, actual_upper_open: float, actual_lower_open: float, ohlc: dict):
     """Fill actual pip moves + the closing price for a previously stored prediction."""
     result = db.predictions.update_one(
         {"id": record_id},
         {"$set": {
-            "actual_upper": actual_upper,
-            "actual_lower": actual_lower,
+            "actual_upper_open": actual_upper_open,
+            "actual_lower_open": actual_lower_open,
             "live_close": ohlc["Close"],
         }},
     )
@@ -78,22 +78,32 @@ def backfill_actuals(pair: str, pip_div: float = 10000.0) -> int:
     before a weekend close) simply stay unfilled — which is correct.
     Returns the number of predictions filled this call.
     """
-    pending = db.predictions.find({"pair": pair, "actual_upper": None})
+    # Catch predictions still missing the open actuals, plus any already-filled
+    # ones that predate the close actuals (self-healing backfill).
+    pending = db.predictions.find({"pair": pair, "$or": [
+        {"actual_upper_open": None},
+        {"actual_upper_close": {"$exists": False}},
+    ]})
     filled = 0
     for p in pending:
         candle = db.ohlcv.find_one({"pair": pair, "time": p["target_time"]})
         if not candle:
             continue
-        actual_upper = (candle["high"] - candle["open"]) * pip_div
-        actual_lower = (candle["open"] - candle["low"]) * pip_div
-        db.predictions.update_one(
-            {"_id": p["_id"]},
-            {"$set": {
-                "actual_upper": float(actual_upper),
-                "actual_lower": float(actual_lower),
-                "live_close": float(candle["close"]),
-            }},
-        )
+        actual_upper_open = (candle["high"] - candle["open"]) * pip_div
+        actual_lower_open = (candle["open"] - candle["low"]) * pip_div
+        update = {
+            "actual_upper_open": float(actual_upper_open),
+            "actual_lower_open": float(actual_lower_open),
+            "live_close": float(candle["close"]),
+        }
+        # Close actuals: target candle high/low measured from the current
+        # candle's close (the price level the prediction was made from).
+        cur = db.ohlcv.find_one({"pair": pair, "time": p["current_candle_time"]})
+        if cur:
+            current_close = cur["close"]
+            update["actual_upper_close"] = (candle["high"] - current_close) * pip_div
+            update["actual_lower_close"] = (current_close - candle["low"]) * pip_div
+        db.predictions.update_one({"_id": p["_id"]}, {"$set": update})
         filled += 1
     return filled
 
@@ -118,9 +128,9 @@ def get_accuracy_stats() -> dict:
     Coverage stats over evaluated predictions. Coverage is computed on the fly
     from the actual pip move vs the predicted q10–q90 pip range.
     """
-    query = {"actual_upper": {"$ne": None}, "actual_lower": {"$ne": None}}
+    query = {"actual_upper_open": {"$ne": None}, "actual_lower_open": {"$ne": None}}
     evaluated = list(db.predictions.find(query, {
-        "_id": 0, "actual_upper": 1, "actual_lower": 1,
+        "_id": 0, "actual_upper_open": 1, "actual_lower_open": 1,
         "upper_q10_pip": 1, "upper_q90_pip": 1,
         "lower_q10_pip": 1, "lower_q90_pip": 1,
     }))
@@ -136,11 +146,11 @@ def get_accuracy_stats() -> dict:
     for d in evaluated:
         uc = (
             d.get("upper_q10_pip") is not None
-            and d["upper_q10_pip"] <= d["actual_upper"] <= d["upper_q90_pip"]
+            and d["upper_q10_pip"] <= d["actual_upper_open"] <= d["upper_q90_pip"]
         )
         lc = (
             d.get("lower_q10_pip") is not None
-            and d["lower_q10_pip"] <= d["actual_lower"] <= d["lower_q90_pip"]
+            and d["lower_q10_pip"] <= d["actual_lower_open"] <= d["lower_q90_pip"]
         )
         upper += uc
         lower += lc
@@ -335,8 +345,10 @@ def iter_predictions_with_candles(
             "_id": 0,
             "current_candle_time": 1,
             "target_time": 1,
-            "actual_upper": 1,
-            "actual_lower": 1,
+            "actual_upper_open": 1,
+            "actual_lower_open": 1,
+            "actual_upper_close": 1,
+            "actual_lower_close": 1,
             "upper_q10_pip": 1,
             "upper_q50_pip": 1,
             "upper_q90_pip": 1,
@@ -361,19 +373,9 @@ def iter_predictions_with_candles(
         {"$sort": {"current_candle_time": 1}},
     ]
 
-    pip_div = 100.0 if pair and pair.upper().endswith("JPY") else 10000.0
     for row in db.predictions.aggregate(pipeline):
         row["time"] = _to_bkk(row.get("current_candle_time"))
         row["target_time"] = _to_bkk(row.get("target_time"))
-        cc = row.get("current_close")
-        nh = row.get("next_candle_high")
-        nl = row.get("next_candle_low")
-        row["actual_upper_close"] = (
-            (nh - cc) * pip_div if cc is not None and nh is not None else None
-        )
-        row["actual_lower_close"] = (
-            (cc - nl) * pip_div if cc is not None and nl is not None else None
-        )
         yield row
 
 

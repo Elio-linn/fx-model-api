@@ -84,7 +84,7 @@ def export_predictions_csv(
     rows = storage.iter_predictions_with_candles(pair=pair, start=start_dt, end=end_dt)
 
     headers = [
-        "time", "target_time", "actual_upper", "actual_lower",
+        "time", "target_time", "actual_upper_open", "actual_lower_open",
         "actual_upper_close", "actual_lower_close",
         "upper_q10_pip", "upper_q50_pip", "upper_q90_pip",
         "lower_q10_pip", "lower_q50_pip", "lower_q90_pip",
@@ -146,7 +146,9 @@ def _to_schema(row: dict) -> PredictionOut:
         lower_q10_price=row.get("lower_q10_price"),
         lower_q50_price=row.get("lower_q50_price"),
         lower_q90_price=row.get("lower_q90_price"),
-        actual_upper=row.get("actual_upper"),
-        actual_lower=row.get("actual_lower"),
+        actual_upper_open=row.get("actual_upper_open"),
+        actual_lower_open=row.get("actual_lower_open"),
+        actual_upper_close=row.get("actual_upper_close"),
+        actual_lower_close=row.get("actual_lower_close"),
         live_close=row.get("live_close"),
     )

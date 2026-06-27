@@ -31,8 +31,10 @@ class PredictionOut(BaseModel):
     lower_q50_price: Optional[float] = None
     lower_q90_price: Optional[float] = None
     # Actuals
-    actual_upper: Optional[float] = None
-    actual_lower: Optional[float] = None
+    actual_upper_open: Optional[float] = None
+    actual_lower_open: Optional[float] = None
+    actual_upper_close: Optional[float] = None
+    actual_lower_close: Optional[float] = None
     live_close: Optional[float] = None
 
 

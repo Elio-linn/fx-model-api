@@ -257,8 +257,10 @@ def _run_cycle():
             "lower_q50_price": candle_close - (float(out_lower[1]) / pip_div),
             "lower_q90_price": candle_close - (float(out_lower[2]) / pip_div),
             # Actuals (filled once the target candle closes)
-            "actual_upper": None,
-            "actual_lower": None,
+            "actual_upper_open": None,
+            "actual_lower_open": None,
+            "actual_upper_close": None,
+            "actual_lower_close": None,
             "live_close": None,
         }
         new_id = storage.append_prediction(record)
