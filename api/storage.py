@@ -59,7 +59,7 @@ def update_actuals(record_id: int, actual_upper_open: float, actual_lower_open: 
         {"$set": {
             "actual_upper_open": actual_upper_open,
             "actual_lower_open": actual_lower_open,
-            "live_close": ohlc["Close"],
+            "live_close": ohlc["close"],
         }},
     )
     if result.matched_count == 0:
@@ -82,7 +82,7 @@ def backfill_actuals(pair: str, pip_div: float = 10000.0) -> int:
     # ones that predate the close actuals (self-healing backfill).
     pending = db.predictions.find({"pair": pair, "$or": [
         {"actual_upper_open": None},
-        {"actual_upper_close": {"$exists": False}},
+        {"actual_upper_close": None},
     ]})
     filled = 0
     for p in pending:
