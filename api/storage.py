@@ -78,32 +78,42 @@ def backfill_actuals(pair: str, pip_div: float = 10000.0) -> int:
     before a weekend close) simply stay unfilled — which is correct.
     Returns the number of predictions filled this call.
     """
-    # Catch predictions still missing the open actuals, plus any already-filled
-    # ones that predate the close actuals (self-healing backfill).
-    pending = db.predictions.find({"pair": pair, "$or": [
-        {"actual_upper_open": None},
-        {"actual_upper_close": None},
-    ]})
+    pending = db.predictions.find({"pair": pair, "actual_upper_close": None})
     filled = 0
     for p in pending:
         candle = db.ohlcv.find_one({"pair": pair, "time": p["target_time"]})
         if not candle:
             continue
-        actual_upper_open = (candle["high"] - candle["open"]) * pip_div
-        actual_lower_open = (candle["open"] - candle["low"]) * pip_div
-        update = {
-            "actual_upper_open": float(actual_upper_open),
-            "actual_lower_open": float(actual_lower_open),
-            "live_close": float(candle["close"]),
-        }
-        # Close actuals: target candle high/low measured from the current
-        # candle's close (the price level the prediction was made from).
-        cur = db.ohlcv.find_one({"pair": pair, "time": p["current_candle_time"]})
-        if cur:
-            current_close = cur["close"]
-            update["actual_upper_close"] = (candle["high"] - current_close) * pip_div
-            update["actual_lower_close"] = (current_close - candle["low"]) * pip_div
-        db.predictions.update_one({"_id": p["_id"]}, {"$set": update})
+        # The target candle must be fully closed before we read its high/low.
+        # save_ohlcv upserts the live/forming candle too, so its mere existence
+        # is not enough — a strictly-later candle must exist. Otherwise we'd fill
+        # actuals from an incomplete candle and, since `pending` only selects
+        # actual_upper_close == None, never recompute them (frozen/wrong values).
+        newer = db.ohlcv.find_one({"pair": pair, "time": {"$gt": p["target_time"]}})
+        if not newer:
+            continue
+        # Close baseline = close of the candle the prediction was made from.
+        # Stored on the record since the schema change; fall back to the ohlcv
+        # candle at current_candle_time for older predictions.
+        base_close = p.get("base_close")
+        if base_close is None:
+            base_candle = db.ohlcv.find_one({"pair": pair, "time": p.get("current_candle_time")})
+            if not base_candle:
+                continue
+            base_close = base_candle["close"]
+        no, nh, nl = candle["open"], candle["high"], candle["low"]
+        db.predictions.update_one(
+            {"_id": p["_id"]},
+            {"$set": {
+                # open-baseline (vs next-candle open)
+                "actual_upper_open": (nh - no) * pip_div,
+                "actual_lower_open": (no - nl) * pip_div,
+                # close-baseline (vs current candle close / base_close)
+                "actual_upper_close": (nh - base_close) * pip_div,
+                "actual_lower_close": (base_close - nl) * pip_div,
+                "live_close": float(candle["close"]),
+            }},
+        )
         filled += 1
     return filled
 
